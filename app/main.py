@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import dashboard, deleted_users, history, upload
+from app.api import dashboard, deleted_users, history, reports, upload
 from app.core.config import get_settings
 from app.core.database import check_database_connection, create_database_tables
 
@@ -35,6 +35,7 @@ app.include_router(upload.router)
 app.include_router(dashboard.router)
 app.include_router(deleted_users.router)
 app.include_router(history.router)
+app.include_router(reports.router)
 
 
 @app.get("/")
