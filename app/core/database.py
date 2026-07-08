@@ -28,3 +28,9 @@ def check_database_connection() -> bool:
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
     return True
+
+
+def create_database_tables() -> None:
+    from app import models  # noqa: F401
+
+    Base.metadata.create_all(bind=engine)
