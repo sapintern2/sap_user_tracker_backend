@@ -16,7 +16,7 @@ NOTE_FILL = PatternFill("solid", fgColor="F8E7C8")
 TITLE_FONT = Font(bold=True)
 
 
-def category_key(category: str | None) -> str:
+def _category_key(category: str | None) -> str:
     value = (category or "").lower()
     if "advanced" in value:
         return "advanced"
@@ -38,9 +38,9 @@ def build_master_audit_workbook(db: Session) -> BytesIO:
     deleted_sheet = workbook.create_sheet("Deleted Users")
     summary_sheet = workbook.create_sheet("Daily Summary")
 
-    fill_data_sheet(data_sheet, db, uploads)
-    fill_deleted_users_sheet(deleted_sheet, db)
-    fill_summary_sheet(summary_sheet, db, uploads)
+    _fill_data_sheet(data_sheet, db, uploads)
+    _fill_deleted_users_sheet(deleted_sheet, db)
+    _fill_summary_sheet(summary_sheet, db, uploads)
 
     output = BytesIO()
     workbook.save(output)
@@ -48,7 +48,7 @@ def build_master_audit_workbook(db: Session) -> BytesIO:
     return output
 
 
-def fill_data_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
+def _fill_data_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
     for index, upload in enumerate(uploads):
         start_column = 1 + (index * 3)
         user_column = start_column
@@ -66,7 +66,7 @@ def fill_data_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
 
         sheet.cell(row=4, column=user_column, value=upload.upload_date)
         sheet.cell(row=4, column=category_column, value=upload.total_users)
-        sheet.cell(row=4, column=user_column).number_format = "dd/mm/yy"
+        sheet.cell(row=4, column=user_column).number_format = "yyyy-mm-dd"
         sheet.cell(row=4, column=user_column).font = TITLE_FONT
         sheet.cell(row=4, column=category_column).font = TITLE_FONT
 
@@ -93,7 +93,7 @@ def fill_data_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
     sheet.freeze_panes = "A6"
 
 
-def fill_deleted_users_sheet(sheet, db: Session) -> None:
+def _fill_deleted_users_sheet(sheet, db: Session) -> None:
     headers = ["Deleted Date", "Username", "Target Classification", "Last Seen Date"]
     sheet.append(headers)
     for cell in sheet[1]:
@@ -107,8 +107,8 @@ def fill_deleted_users_sheet(sheet, db: Session) -> None:
         sheet.append([user.deleted_date, user.username, user.category, user.last_seen_date])
 
     for row in sheet.iter_rows(min_row=2, min_col=1, max_col=4):
-        row[0].number_format = "dd/mm/yy"
-        row[3].number_format = "dd/mm/yy"
+        row[0].number_format = "yyyy-mm-dd"
+        row[3].number_format = "yyyy-mm-dd"
 
     widths = [18, 22, 28, 18]
     for index, width in enumerate(widths, start=1):
@@ -117,7 +117,7 @@ def fill_deleted_users_sheet(sheet, db: Session) -> None:
     sheet.freeze_panes = "A2"
 
 
-def fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
+def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
     headers = [
         "Date",
         "Total Users",
@@ -136,12 +136,13 @@ def fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
         users = db.scalars(select(DailyUser).where(DailyUser.upload_id == upload.id)).all()
         counts = {"advanced": 0, "core": 0, "self": 0, "other": 0}
         for user in users:
-            counts[category_key(user.category)] += 1
+            counts[_category_key(user.category)] += 1
 
-        deleted_count = db.scalar(
-            select(func.count(DeletedUser.id)).where(DeletedUser.current_upload_id == upload.id)
-        ) or 0
-
+        deleted_count = len(
+            db.scalars(
+                select(DeletedUser).where(DeletedUser.current_upload_id == upload.id)
+            ).all()
+        )
         sheet.append(
             [
                 upload.upload_date,
@@ -155,7 +156,7 @@ def fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
         )
 
     for row in sheet.iter_rows(min_row=2, min_col=1, max_col=1):
-        row[0].number_format = "dd/mm/yy"
+        row[0].number_format = "yyyy-mm-dd"
 
     for column in range(1, len(headers) + 1):
         sheet.column_dimensions[get_column_letter(column)].width = 20
