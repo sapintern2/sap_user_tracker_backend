@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.audit_log import AuditLog
+from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
 from app.models.upload import Upload
-from app.services.comparison import find_deleted_users
+from app.services.comparison import find_classification_movements, find_deleted_users
 from app.services.excel_reader import read_sap_user_export
 
 
@@ -59,6 +60,24 @@ def upload_excel(
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
 
+    duplicate_upload = db.scalar(
+        select(Upload)
+        .where(
+            Upload.upload_date >= parsed_upload_date.replace(hour=0, minute=0, second=0, microsecond=0),
+            Upload.upload_date <= parsed_upload_date.replace(hour=23, minute=59, second=59, microsecond=999999),
+        )
+        .limit(1)
+    )
+    if duplicate_upload:
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "An upload already exists for this date. Delete the existing latest upload "
+                "first if you need to replace it."
+            ),
+        )
+
     previous_upload = db.scalar(
         select(Upload).order_by(Upload.upload_date.desc(), Upload.id.desc()).limit(1)
     )
@@ -84,12 +103,17 @@ def upload_excel(
         DailyUser(
             upload_id=current_upload.id,
             username=user["username"],
+            user_id=user.get("user_id"),
+            full_name=user.get("full_name"),
             category=user["category"],
         )
         for user in users
     )
 
     deleted_users = find_deleted_users(previous_users, users) if previous_upload else []
+    classification_movements = (
+        find_classification_movements(previous_users, users) if previous_upload else []
+    )
     if previous_upload:
         db.add_all(
             DeletedUser(
@@ -102,13 +126,27 @@ def upload_excel(
             )
             for user in deleted_users
         )
+        db.add_all(
+            ClassificationMovement(
+                username=movement["username"],
+                user_id=movement["user_id"],
+                full_name=movement["full_name"],
+                from_category=movement["from_category"],
+                to_category=movement["to_category"],
+                movement_date=parsed_upload_date,
+                previous_upload_id=previous_upload.id,
+                current_upload_id=current_upload.id,
+            )
+            for movement in classification_movements
+        )
 
     db.add(
         AuditLog(
             action="excel_upload",
             description=(
                 f"Uploaded {file.filename}; saved {len(users)} users and "
-                f"detected {len(deleted_users)} deleted users."
+                f"detected {len(deleted_users)} deleted users and "
+                f"{len(classification_movements)} classification movements."
             ),
         )
     )
@@ -119,5 +157,6 @@ def upload_excel(
         "upload_id": current_upload.id,
         "total_users": len(users),
         "deleted_users": len(deleted_users),
+        "classification_movements": len(classification_movements),
         "upload_date": parsed_upload_date.date().isoformat(),
     }

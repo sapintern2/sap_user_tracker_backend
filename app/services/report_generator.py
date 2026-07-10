@@ -6,9 +6,11 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
 from app.models.upload import Upload
+from app.services.comparison import normalize_category
 
 
 HEADER_FILL = PatternFill("solid", fgColor="DDEBE7")
@@ -17,14 +19,18 @@ TITLE_FONT = Font(bold=True)
 
 
 def _category_key(category: str | None) -> str:
-    value = (category or "").lower()
-    if "advanced" in value:
+    key = normalize_category(category)
+    if key == "advanced_users":
         return "advanced"
-    if "core" in value:
+    if key == "core_users":
         return "core"
-    if "self-service" in value or "self service" in value:
+    if key == "self_service_users":
         return "self"
     return "other"
+
+
+def _movement_key(from_category: str | None, to_category: str | None) -> str:
+    return f"{normalize_category(from_category)}_to_{normalize_category(to_category)}"
 
 
 def build_master_audit_workbook(db: Session) -> BytesIO:
@@ -35,10 +41,12 @@ def build_master_audit_workbook(db: Session) -> BytesIO:
     workbook = Workbook()
     data_sheet = workbook.active
     data_sheet.title = "Data"
+    movement_sheet = workbook.create_sheet("Classification Movements")
     deleted_sheet = workbook.create_sheet("Deleted Users")
     summary_sheet = workbook.create_sheet("Daily Summary")
 
     _fill_data_sheet(data_sheet, db, uploads)
+    _fill_classification_movements_sheet(movement_sheet, db)
     _fill_deleted_users_sheet(deleted_sheet, db)
     _fill_summary_sheet(summary_sheet, db, uploads)
 
@@ -93,6 +101,50 @@ def _fill_data_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
     sheet.freeze_panes = "A6"
 
 
+def _fill_classification_movements_sheet(sheet, db: Session) -> None:
+    headers = [
+        "Movement Date",
+        "Username",
+        "From Classification",
+        "To Classification",
+        "Previous Upload Date",
+        "Current Upload Date",
+    ]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.fill = HEADER_FILL
+        cell.font = TITLE_FONT
+
+    movements = db.scalars(
+        select(ClassificationMovement).order_by(
+            ClassificationMovement.movement_date,
+            ClassificationMovement.username,
+        )
+    ).all()
+    for movement in movements:
+        sheet.append(
+            [
+                movement.movement_date,
+                movement.username,
+                movement.from_category,
+                movement.to_category,
+                movement.previous_upload.upload_date,
+                movement.current_upload.upload_date,
+            ]
+        )
+
+    for row in sheet.iter_rows(min_row=2, min_col=1, max_col=6):
+        row[0].number_format = "yyyy-mm-dd"
+        row[4].number_format = "yyyy-mm-dd"
+        row[5].number_format = "yyyy-mm-dd"
+
+    widths = [18, 22, 28, 28, 22, 22]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    sheet.freeze_panes = "A2"
+
+
 def _fill_deleted_users_sheet(sheet, db: Session) -> None:
     headers = ["Deleted Date", "Username", "Target Classification", "Last Seen Date"]
     sheet.append(headers)
@@ -126,6 +178,12 @@ def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
         "Self-Service Users",
         "Other Users",
         "Deleted Users",
+        "Advanced to Core",
+        "Advanced to Self-Service",
+        "Core to Advanced",
+        "Core to Self-Service",
+        "Self-Service to Advanced",
+        "Self-Service to Core",
     ]
     sheet.append(headers)
     for cell in sheet[1]:
@@ -143,6 +201,24 @@ def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
                 select(DeletedUser).where(DeletedUser.current_upload_id == upload.id)
             ).all()
         )
+        movement_counts = {
+            "advanced_users_to_core_users": 0,
+            "advanced_users_to_self_service_users": 0,
+            "core_users_to_advanced_users": 0,
+            "core_users_to_self_service_users": 0,
+            "self_service_users_to_advanced_users": 0,
+            "self_service_users_to_core_users": 0,
+        }
+        movements = db.scalars(
+            select(ClassificationMovement).where(
+                ClassificationMovement.current_upload_id == upload.id
+            )
+        ).all()
+        for movement in movements:
+            key = _movement_key(movement.from_category, movement.to_category)
+            if key in movement_counts:
+                movement_counts[key] += 1
+
         sheet.append(
             [
                 upload.upload_date,
@@ -152,6 +228,12 @@ def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
                 counts["self"],
                 counts["other"],
                 deleted_count,
+                movement_counts["advanced_users_to_core_users"],
+                movement_counts["advanced_users_to_self_service_users"],
+                movement_counts["core_users_to_advanced_users"],
+                movement_counts["core_users_to_self_service_users"],
+                movement_counts["self_service_users_to_advanced_users"],
+                movement_counts["self_service_users_to_core_users"],
             ]
         )
 
