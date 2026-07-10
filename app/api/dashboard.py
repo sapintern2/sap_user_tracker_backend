@@ -5,23 +5,32 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
 from app.models.upload import Upload
+from app.services.comparison import normalize_category
 
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
 def category_key(category: str | None) -> str:
-    value = (category or "").lower()
-    if "advanced" in value:
-        return "advanced_users"
-    if "core" in value:
-        return "core_users"
-    if "self-service" in value or "self service" in value:
-        return "self_service_users"
-    return "other_users"
+    return normalize_category(category)
+
+
+MOVEMENT_KEYS = [
+    ("advanced_users", "core_users"),
+    ("advanced_users", "self_service_users"),
+    ("core_users", "advanced_users"),
+    ("core_users", "self_service_users"),
+    ("self_service_users", "advanced_users"),
+    ("self_service_users", "core_users"),
+]
+
+
+def movement_key(from_category: str, to_category: str) -> str:
+    return f"{from_category.replace('_users', '')}_to_{to_category.replace('_users', '')}"
 
 
 @router.get("/users")
@@ -61,9 +70,76 @@ def get_latest_users(
         "users": [
             {
                 "username": user.username,
+                "user_id": user.user_id,
+                "full_name": user.full_name,
                 "category": user.category,
             }
             for user in users
+        ],
+    }
+
+
+@router.get("/movements")
+def get_classification_movements(
+    stats_date: date | None = Query(default=None),
+    from_category: str | None = Query(default=None),
+    to_category: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    selected_upload_statement = select(Upload)
+    if stats_date:
+        start_at = datetime.combine(stats_date, time.min)
+        end_at = datetime.combine(stats_date, time.max)
+        selected_upload_statement = selected_upload_statement.where(
+            Upload.upload_date >= start_at,
+            Upload.upload_date <= end_at,
+        )
+
+    selected_upload = db.scalar(
+        selected_upload_statement.order_by(Upload.upload_date.desc(), Upload.id.desc()).limit(1)
+    )
+
+    if not selected_upload:
+        return {
+            "upload_date": None,
+            "from_category": from_category,
+            "to_category": to_category,
+            "users": [],
+        }
+
+    movements = db.scalars(
+        select(ClassificationMovement)
+        .where(ClassificationMovement.current_upload_id == selected_upload.id)
+        .order_by(ClassificationMovement.username)
+    ).all()
+
+    if from_category:
+        movements = [
+            movement
+            for movement in movements
+            if category_key(movement.from_category) == from_category
+        ]
+    if to_category:
+        movements = [
+            movement for movement in movements if category_key(movement.to_category) == to_category
+        ]
+
+    return {
+        "upload_date": selected_upload.upload_date.date().isoformat(),
+        "from_category": from_category,
+        "to_category": to_category,
+        "users": [
+            {
+                "username": movement.username,
+                "user_id": movement.user_id,
+                "full_name": movement.full_name,
+                "from_category": movement.from_category,
+                "to_category": movement.to_category,
+                "movement_date": movement.movement_date.date().isoformat(),
+                "previous_upload_date": movement.previous_upload.upload_date.date().isoformat(),
+                "current_upload_date": movement.current_upload.upload_date.date().isoformat(),
+            }
+            for movement in movements
         ],
     }
 
@@ -106,6 +182,17 @@ def get_dashboard(
             category_counts[category_key(user.category)] += 1
 
     total_uploads = db.scalar(select(func.count(Upload.id))) or 0
+    movement_counts = {movement_key(from_key, to_key): 0 for from_key, to_key in MOVEMENT_KEYS}
+    if selected_upload:
+        movements = db.scalars(
+            select(ClassificationMovement).where(
+                ClassificationMovement.current_upload_id == selected_upload.id
+            )
+        ).all()
+        for movement in movements:
+            key = movement_key(category_key(movement.from_category), category_key(movement.to_category))
+            if key in movement_counts:
+                movement_counts[key] += 1
 
     stats_deleted_date = (
         selected_upload.upload_date.date()
@@ -163,6 +250,7 @@ def get_dashboard(
             "deleted_users_for_selected_date": len(selected_deleted_users),
             "total_uploads": total_uploads,
         },
+        "classification_movements_summary": movement_counts,
         "stats_deleted_date": stats_deleted_date.isoformat(),
         "selected_deleted_date": selected_date.isoformat(),
         "deleted_users": [

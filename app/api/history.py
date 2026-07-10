@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.audit_log import AuditLog
+from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
 from app.models.upload import Upload
@@ -74,6 +75,16 @@ def delete_latest_upload(upload_id: int, db: Session = Depends(get_db)) -> dict[
     file_name = upload.file_name
     db.execute(delete(DeletedUser).where(DeletedUser.current_upload_id == upload.id))
     db.execute(delete(DeletedUser).where(DeletedUser.previous_upload_id == upload.id))
+    db.execute(
+        delete(ClassificationMovement).where(
+            ClassificationMovement.current_upload_id == upload.id
+        )
+    )
+    db.execute(
+        delete(ClassificationMovement).where(
+            ClassificationMovement.previous_upload_id == upload.id
+        )
+    )
     db.execute(delete(DailyUser).where(DailyUser.upload_id == upload.id))
     db.delete(upload)
     db.add(
