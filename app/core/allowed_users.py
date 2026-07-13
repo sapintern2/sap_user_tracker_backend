@@ -1,0 +1,17 @@
+ALLOWED_USERS = [
+    {"name": "Priyantha Satharasinghe", "email": "priyanthas.cblms@cbllk.com"},
+    {"name": "Shehan Sahabandu", "email": "shehans.cblms@cbllk.com"},
+    {"name": "Shamila Perera", "email": "shamilap.cblms@cbllk.com"},
+    {"name": "Isuru Devinda", "email": "isurud.cblcs@cbllk.com"},
+    {"name": "Manjula Prabath", "email": "manjulak.cbl@cbllk.com"},
+    {"name": "Nadi Hewage", "email": "nadih.cblms@cbllk.com"},
+    {"name": "Thevathasan Vasanthakumar", "email": "thevathasanv.cblcs@cbllk.com"},
+    {"name": "Kirubanandan Kapilan", "email": "kapilank.cblcs@cbllk.com"},
+    {"name": "Gayesha Suraweera", "email": "gayeshas.cblms@cbllk.com"},
+    {"name": "Thara Batagalle", "email": "tharab.cblcs@cbllk.com"},
+    {"name": "Shyamal Chandrasena", "email": "shyamalc.cblms@cbllk.com"},
+    {"name": "Bhagya Mendis", "email": "bhagyam.cblcs@cbllk.com"},
+    {"name": "Koshila Pathmasiri", "email": "koshilap.cblms@cbllk.com"},
+    {"name": "Mithila Manori Withanage", "email": "mithilaw.cblms@cbllk.com"},
+    {"name": "Ashika Wijesundara", "email": "sapintern2.cblcs@cbllk.com"},
+]

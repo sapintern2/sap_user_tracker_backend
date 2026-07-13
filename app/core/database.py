@@ -32,9 +32,12 @@ def check_database_connection() -> bool:
 
 def create_database_tables() -> None:
     from app import models  # noqa: F401
+    from app.services.user_seed import seed_allowed_users
 
     Base.metadata.create_all(bind=engine)
     ensure_schema_columns()
+    with SessionLocal() as db:
+        seed_allowed_users(db)
 
 
 def ensure_schema_columns() -> None:
@@ -46,6 +49,9 @@ def ensure_schema_columns() -> None:
         "classification_movements": {
             "user_id": "VARCHAR(100)",
             "full_name": "VARCHAR(255)",
+        },
+        "app_users": {
+            "role": "VARCHAR(50) DEFAULT 'user' NOT NULL",
         },
     }
 
