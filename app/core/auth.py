@@ -112,7 +112,7 @@ def get_current_user(
         )
 
     user = db.get(AppUser, payload.get("sub"))
-    if not user or not user.is_active:
+    if not user or user.deleted_at or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User is not allowed",
@@ -139,4 +139,9 @@ def require_admin_user(user: AppUser = Depends(require_ready_user)) -> AppUser:
 
 
 def find_user_by_email(db: Session, email: str) -> AppUser | None:
-    return db.scalar(select(AppUser).where(AppUser.email == normalize_email(email)))
+    return db.scalar(
+        select(AppUser).where(
+            AppUser.email == normalize_email(email),
+            AppUser.deleted_at.is_(None),
+        )
+    )

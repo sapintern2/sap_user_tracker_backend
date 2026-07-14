@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.core.auth import hash_password, normalize_email, require_admin_user
@@ -20,6 +20,15 @@ class CreateUserRequest(BaseModel):
     email: str
 
 
+SRI_LANKA_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def local_day_utc_range(login_date: date) -> tuple[datetime, datetime]:
+    local_start = datetime.combine(login_date, time.min)
+    local_end = datetime.combine(login_date, time.max)
+    return local_start - SRI_LANKA_OFFSET, local_end - SRI_LANKA_OFFSET
+
+
 def serialize_admin_user(user: AppUser) -> dict[str, object]:
     return {
         "id": user.id,
@@ -27,6 +36,7 @@ def serialize_admin_user(user: AppUser) -> dict[str, object]:
         "name": user.name,
         "role": user.role,
         "is_active": user.is_active,
+        "failed_login_attempts": user.failed_login_attempts,
         "must_change_password": user.must_change_password,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
         "created_at": user.created_at.isoformat(),
@@ -38,7 +48,11 @@ def list_users(
     db: Session = Depends(get_db),
     _: AppUser = Depends(require_admin_user),
 ) -> dict[str, list[dict[str, object]]]:
-    users = db.scalars(select(AppUser).order_by(AppUser.role, AppUser.name)).all()
+    users = db.scalars(
+        select(AppUser)
+        .where(AppUser.deleted_at.is_(None))
+        .order_by(AppUser.role, AppUser.name)
+    ).all()
     return {"users": [serialize_admin_user(user) for user in users]}
 
 
@@ -51,6 +65,18 @@ def create_user(
     email = normalize_email(payload.email)
     existing = db.scalar(select(AppUser).where(AppUser.email == email))
     if existing:
+        if existing.deleted_at:
+            existing.name = payload.name.strip()
+            existing.role = "user"
+            existing.password_hash = hash_password(get_settings().auth_default_password)
+            existing.must_change_password = True
+            existing.is_active = True
+            existing.failed_login_attempts = 0
+            existing.deleted_at = None
+            db.commit()
+            db.refresh(existing)
+            return {"user": serialize_admin_user(existing)}
+
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
 
     user = AppUser(
@@ -60,6 +86,7 @@ def create_user(
         password_hash=hash_password(get_settings().auth_default_password),
         must_change_password=True,
         is_active=True,
+        failed_login_attempts=0,
     )
     db.add(user)
     db.commit()
@@ -74,7 +101,7 @@ def block_user(
     admin: AppUser = Depends(require_admin_user),
 ) -> dict[str, object]:
     user = db.get(AppUser, user_id)
-    if not user:
+    if not user or user.deleted_at:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if user.id == admin.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin cannot block self")
@@ -92,10 +119,11 @@ def unblock_user(
     _: AppUser = Depends(require_admin_user),
 ) -> dict[str, object]:
     user = db.get(AppUser, user_id)
-    if not user:
+    if not user or user.deleted_at:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     user.is_active = True
+    user.failed_login_attempts = 0
     db.commit()
     db.refresh(user)
     return {"user": serialize_admin_user(user)}
@@ -108,14 +136,34 @@ def reset_user_password(
     _: AppUser = Depends(require_admin_user),
 ) -> dict[str, object]:
     user = db.get(AppUser, user_id)
-    if not user:
+    if not user or user.deleted_at:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     user.password_hash = hash_password(get_settings().auth_default_password)
     user.must_change_password = True
+    user.failed_login_attempts = 0
+    user.is_active = True
     db.commit()
     db.refresh(user)
     return {"user": serialize_admin_user(user)}
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: AppUser = Depends(require_admin_user),
+) -> dict[str, object]:
+    user = db.get(AppUser, user_id)
+    if not user or user.deleted_at:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == admin.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin cannot delete self")
+
+    user.is_active = False
+    user.deleted_at = datetime.utcnow()
+    db.commit()
+    return {"deleted": True, "user_id": user_id}
 
 
 @router.get("/logins")
@@ -126,11 +174,7 @@ def list_login_events(
 ) -> dict[str, list[dict[str, object]]]:
     statement = select(LoginEvent)
     if login_date:
-        sri_lanka_offset = timedelta(hours=5, minutes=30)
-        local_start = datetime.combine(login_date, time.min)
-        local_end = datetime.combine(login_date, time.max)
-        utc_start = local_start - sri_lanka_offset
-        utc_end = local_end - sri_lanka_offset
+        utc_start, utc_end = local_day_utc_range(login_date)
         statement = statement.where(
             LoginEvent.created_at >= utc_start,
             LoginEvent.created_at <= utc_end,
@@ -151,4 +195,33 @@ def list_login_events(
             }
             for event in events
         ]
+    }
+
+
+@router.delete("/logins")
+def clear_login_events(
+    login_date: date = Query(...),
+    db: Session = Depends(get_db),
+    _: AppUser = Depends(require_admin_user),
+) -> dict[str, object]:
+    utc_start, utc_end = local_day_utc_range(login_date)
+    login_result = db.execute(
+        delete(LoginEvent).where(
+            LoginEvent.created_at >= utc_start,
+            LoginEvent.created_at <= utc_end,
+        )
+    )
+    user_result = db.execute(
+        update(AppUser)
+        .where(
+            AppUser.last_login_at >= utc_start,
+            AppUser.last_login_at <= utc_end,
+        )
+        .values(last_login_at=None)
+    )
+    db.commit()
+    return {
+        "deleted": login_result.rowcount or 0,
+        "last_login_cleared": user_result.rowcount or 0,
+        "login_date": login_date.isoformat(),
     }
