@@ -52,6 +52,13 @@ def ensure_schema_columns() -> None:
         },
         "app_users": {
             "role": "VARCHAR(50) DEFAULT 'user' NOT NULL",
+            "must_change_password": "BOOLEAN DEFAULT TRUE NOT NULL",
+            "is_active": "BOOLEAN DEFAULT TRUE NOT NULL",
+            "failed_login_attempts": "INTEGER DEFAULT 0 NOT NULL",
+            "last_login_at": "TIMESTAMP NULL",
+            "deleted_at": "TIMESTAMP NULL",
+            "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+            "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
         },
     }
 

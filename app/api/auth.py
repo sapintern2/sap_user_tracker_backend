@@ -1,6 +1,6 @@
 import re
-from fastapi import HTTPException, status
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ from app.models.login_event import LoginEvent
 
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+MAX_FAILED_LOGIN_ATTEMPTS = 5
 
 
 class LoginRequest(BaseModel):
@@ -72,14 +73,26 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, obj
         )
 
     if not verify_password(payload.password, user.password_hash):
+        user.failed_login_attempts += 1
+        remaining_attempts = MAX_FAILED_LOGIN_ATTEMPTS - user.failed_login_attempts
+        if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+            user.is_active = False
+            log_login_event(db, email, False, "Blocked after 5 invalid password attempts", user)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User is blocked after 5 invalid password attempts. Please contact admin.",
+            )
+
         log_login_event(db, email, False, "Invalid password", user)
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail=f"Invalid email or password. {remaining_attempts} attempts remaining.",
         )
 
     user.last_login_at = datetime.utcnow()
+    user.failed_login_attempts = 0
     log_login_event(db, email, True, "Success", user)
     db.commit()
 
@@ -94,9 +107,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, obj
 def get_me(user: AppUser = Depends(get_current_user)) -> dict[str, object]:
     return {"user": serialize_user(user)}
 
+
 PASSWORD_REGEX = re.compile(
     r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$"
 )
+
 
 @router.post("/change-password")
 def change_password(
