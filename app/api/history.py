@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
+from app.models.new_user import NewUser
 from app.models.upload import Upload
 
 
@@ -75,6 +76,8 @@ def delete_latest_upload(upload_id: int, db: Session = Depends(get_db)) -> dict[
     file_name = upload.file_name
     db.execute(delete(DeletedUser).where(DeletedUser.current_upload_id == upload.id))
     db.execute(delete(DeletedUser).where(DeletedUser.previous_upload_id == upload.id))
+    db.execute(delete(NewUser).where(NewUser.current_upload_id == upload.id))
+    db.execute(delete(NewUser).where(NewUser.previous_upload_id == upload.id))
     db.execute(
         delete(ClassificationMovement).where(
             ClassificationMovement.current_upload_id == upload.id

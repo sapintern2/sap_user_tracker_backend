@@ -9,6 +9,14 @@ def find_deleted_users(
     return [user for user in previous_users if user.username not in current_usernames]
 
 
+def find_new_users(
+    previous_users: list[DailyUser],
+    current_users: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    previous_usernames = {user.username for user in previous_users}
+    return [user for user in current_users if user["username"] not in previous_usernames]
+
+
 def normalize_category(category: str | None) -> str:
     value = (category or "").strip().lower()
     if "advanced" in value:

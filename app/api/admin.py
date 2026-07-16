@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import hash_password, normalize_email, require_admin_user
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.time import sri_lanka_day_range, sri_lanka_iso, sri_lanka_now
 from app.models.app_user import AppUser
 from app.models.login_event import LoginEvent
 
@@ -20,15 +21,6 @@ class CreateUserRequest(BaseModel):
     email: str
 
 
-SRI_LANKA_OFFSET = timedelta(hours=5, minutes=30)
-
-
-def local_day_utc_range(login_date: date) -> tuple[datetime, datetime]:
-    local_start = datetime.combine(login_date, time.min)
-    local_end = datetime.combine(login_date, time.max)
-    return local_start - SRI_LANKA_OFFSET, local_end - SRI_LANKA_OFFSET
-
-
 def serialize_admin_user(user: AppUser) -> dict[str, object]:
     return {
         "id": user.id,
@@ -38,8 +30,8 @@ def serialize_admin_user(user: AppUser) -> dict[str, object]:
         "is_active": user.is_active,
         "failed_login_attempts": user.failed_login_attempts,
         "must_change_password": user.must_change_password,
-        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
-        "created_at": user.created_at.isoformat(),
+        "last_login_at": sri_lanka_iso(user.last_login_at),
+        "created_at": sri_lanka_iso(user.created_at),
     }
 
 
@@ -161,7 +153,7 @@ def delete_user(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin cannot delete self")
 
     user.is_active = False
-    user.deleted_at = datetime.utcnow()
+    user.deleted_at = sri_lanka_now()
     db.commit()
     return {"deleted": True, "user_id": user_id}
 
@@ -174,10 +166,10 @@ def list_login_events(
 ) -> dict[str, list[dict[str, object]]]:
     statement = select(LoginEvent)
     if login_date:
-        utc_start, utc_end = local_day_utc_range(login_date)
+        day_start, day_end = sri_lanka_day_range(login_date)
         statement = statement.where(
-            LoginEvent.created_at >= utc_start,
-            LoginEvent.created_at <= utc_end,
+            LoginEvent.created_at >= day_start,
+            LoginEvent.created_at <= day_end,
         )
 
     events = db.scalars(
@@ -191,7 +183,7 @@ def list_login_events(
                 "name": event.user.name if event.user else None,
                 "success": event.success,
                 "reason": event.reason,
-                "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat(),
+                "created_at": sri_lanka_iso(event.created_at),
             }
             for event in events
         ]
@@ -204,18 +196,18 @@ def clear_login_events(
     db: Session = Depends(get_db),
     _: AppUser = Depends(require_admin_user),
 ) -> dict[str, object]:
-    utc_start, utc_end = local_day_utc_range(login_date)
+    day_start, day_end = sri_lanka_day_range(login_date)
     login_result = db.execute(
         delete(LoginEvent).where(
-            LoginEvent.created_at >= utc_start,
-            LoginEvent.created_at <= utc_end,
+            LoginEvent.created_at >= day_start,
+            LoginEvent.created_at <= day_end,
         )
     )
     user_result = db.execute(
         update(AppUser)
         .where(
-            AppUser.last_login_at >= utc_start,
-            AppUser.last_login_at <= utc_end,
+            AppUser.last_login_at >= day_start,
+            AppUser.last_login_at <= day_end,
         )
         .values(last_login_at=None)
     )

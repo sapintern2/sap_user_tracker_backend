@@ -36,3 +36,13 @@ class Upload(Base):
         back_populates="current_upload",
         foreign_keys="ClassificationMovement.current_upload_id",
     )
+    new_users_as_previous = relationship(
+        "NewUser",
+        back_populates="previous_upload",
+        foreign_keys="NewUser.previous_upload_id",
+    )
+    new_users_as_current = relationship(
+        "NewUser",
+        back_populates="current_upload",
+        foreign_keys="NewUser.current_upload_id",
+    )

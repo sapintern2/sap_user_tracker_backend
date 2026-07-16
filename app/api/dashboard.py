@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
+from app.models.new_user import NewUser
 from app.models.upload import Upload
 from app.services.comparison import normalize_category
 
@@ -144,6 +145,48 @@ def get_classification_movements(
     }
 
 
+@router.get("/new-users")
+def get_new_users(
+    stats_date: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    selected_upload_statement = select(Upload)
+    if stats_date:
+        start_at = datetime.combine(stats_date, time.min)
+        end_at = datetime.combine(stats_date, time.max)
+        selected_upload_statement = selected_upload_statement.where(
+            Upload.upload_date >= start_at,
+            Upload.upload_date <= end_at,
+        )
+
+    selected_upload = db.scalar(
+        selected_upload_statement.order_by(Upload.upload_date.desc(), Upload.id.desc()).limit(1)
+    )
+
+    if not selected_upload:
+        return {"upload_date": None, "users": []}
+
+    users = db.scalars(
+        select(NewUser)
+        .where(NewUser.current_upload_id == selected_upload.id)
+        .order_by(NewUser.username)
+    ).all()
+
+    return {
+        "upload_date": selected_upload.upload_date.date().isoformat(),
+        "users": [
+            {
+                "username": user.username,
+                "user_id": user.user_id,
+                "full_name": user.full_name,
+                "category": user.category,
+                "added_date": user.added_date.date().isoformat(),
+            }
+            for user in users
+        ],
+    }
+
+
 @router.get("")
 def get_dashboard(
     deleted_date: date | None = Query(default=None),
@@ -207,6 +250,11 @@ def get_dashboard(
             DeletedUser.deleted_date <= stats_deleted_end,
         )
     ) or 0
+    stats_new_count = 0
+    if selected_upload:
+        stats_new_count = db.scalar(
+            select(func.count(NewUser.id)).where(NewUser.current_upload_id == selected_upload.id)
+        ) or 0
 
     today = datetime.utcnow().date()
     selected_date = deleted_date or today
@@ -226,6 +274,14 @@ def get_dashboard(
         )
         .group_by(func.date(DeletedUser.deleted_date))
         .order_by(func.date(DeletedUser.deleted_date))
+    ).all()
+    new_user_trend_rows = db.execute(
+        select(
+            func.date(NewUser.added_date).label("added_day"),
+            func.count(NewUser.id).label("added_count"),
+        )
+        .group_by(func.date(NewUser.added_date))
+        .order_by(func.date(NewUser.added_date))
     ).all()
 
     return {
@@ -247,6 +303,7 @@ def get_dashboard(
             "total_users": selected_upload.total_users if selected_upload else 0,
             **category_counts,
             "deleted_users_for_stats_date": stats_deleted_count,
+            "new_users_for_stats_date": stats_new_count,
             "deleted_users_for_selected_date": len(selected_deleted_users),
             "total_uploads": total_uploads,
         },
@@ -268,5 +325,12 @@ def get_dashboard(
                 "count": row.deleted_count,
             }
             for row in trend_rows
+        ],
+        "new_user_trend": [
+            {
+                "date": row.added_day.isoformat(),
+                "count": row.added_count,
+            }
+            for row in new_user_trend_rows
         ],
     }

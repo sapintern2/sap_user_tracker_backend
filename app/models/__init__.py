@@ -4,6 +4,7 @@ from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
 from app.models.login_event import LoginEvent
+from app.models.new_user import NewUser
 from app.models.upload import Upload
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "DailyUser",
     "DeletedUser",
     "LoginEvent",
+    "NewUser",
     "Upload",
 ]
