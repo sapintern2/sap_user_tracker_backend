@@ -12,7 +12,8 @@ from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
 from app.models.deleted_user import DeletedUser
 from app.models.upload import Upload
-from app.services.comparison import find_classification_movements, find_deleted_users
+from app.models.new_user import NewUser
+from app.services.comparison import find_classification_movements, find_deleted_users, find_new_users
 from app.services.excel_reader import read_sap_user_export
 
 
@@ -111,10 +112,23 @@ def upload_excel(
     )
 
     deleted_users = find_deleted_users(previous_users, users) if previous_upload else []
+    new_users = find_new_users(previous_users, users) if previous_upload else []
     classification_movements = (
         find_classification_movements(previous_users, users) if previous_upload else []
     )
     if previous_upload:
+        db.add_all(
+            NewUser(
+                username=user["username"],
+                user_id=user.get("user_id"),
+                full_name=user.get("full_name"),
+                category=user["category"],
+                added_date=parsed_upload_date,
+                previous_upload_id=previous_upload.id,
+                current_upload_id=current_upload.id,
+            )
+            for user in new_users
+        )
         db.add_all(
             DeletedUser(
                 username=user.username,
@@ -145,7 +159,8 @@ def upload_excel(
             action="excel_upload",
             description=(
                 f"Uploaded {file.filename}; saved {len(users)} users and "
-                f"detected {len(deleted_users)} deleted users and "
+                f"detected {len(deleted_users)} deleted users, "
+                f"{len(new_users)} new users, and "
                 f"{len(classification_movements)} classification movements."
             ),
         )
@@ -157,6 +172,7 @@ def upload_excel(
         "upload_id": current_upload.id,
         "total_users": len(users),
         "deleted_users": len(deleted_users),
+        "new_users": len(new_users),
         "classification_movements": len(classification_movements),
         "upload_date": parsed_upload_date.date().isoformat(),
     }

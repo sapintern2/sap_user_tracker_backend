@@ -1,5 +1,4 @@
 import re
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -14,6 +13,7 @@ from app.core.auth import (
     verify_password,
 )
 from app.core.database import get_db
+from app.core.time import sri_lanka_now
 from app.models.app_user import AppUser
 from app.models.login_event import LoginEvent
 
@@ -91,7 +91,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, obj
             detail=f"Invalid email or password. {remaining_attempts} attempts remaining.",
         )
 
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = sri_lanka_now()
     user.failed_login_attempts = 0
     log_login_event(db, email, True, "Success", user)
     db.commit()
