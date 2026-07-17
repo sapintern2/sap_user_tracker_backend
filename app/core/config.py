@@ -12,6 +12,7 @@ class Settings(BaseModel):
     auth_default_password: str = "Pannipitiya@123"
     auth_token_hours: int = 12
     auth_admin_email: str = "priyanthas.cblms@cbllk.com"
+    sap_export_watch_folder: str | None = None
 
 
 @lru_cache
@@ -28,4 +29,5 @@ def get_settings() -> Settings:
         auth_default_password=getenv("AUTH_DEFAULT_PASSWORD", "Pannipitiya@123"),
         auth_token_hours=int(getenv("AUTH_TOKEN_HOURS", "12")),
         auth_admin_email=getenv("AUTH_ADMIN_EMAIL", "priyanthas.cblms@cbllk.com").lower(),
+        sap_export_watch_folder=getenv("SAP_EXPORT_WATCH_FOLDER"),
     )
