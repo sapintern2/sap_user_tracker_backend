@@ -6,9 +6,12 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models import upload
 from app.models.classification_movement import ClassificationMovement
 from app.models.daily_user import DailyUser
+from app.models.new_user import NewUser
 from app.models.deleted_user import DeletedUser
+from app.models.new_user import NewUser
 from app.models.upload import Upload
 from app.services.comparison import normalize_category
 
@@ -42,11 +45,13 @@ def build_master_audit_workbook(db: Session) -> BytesIO:
     data_sheet = workbook.active
     data_sheet.title = "Data"
     movement_sheet = workbook.create_sheet("Classification Movements")
+    new_users_sheet = workbook.create_sheet("New Users")
     deleted_sheet = workbook.create_sheet("Deleted Users")
     summary_sheet = workbook.create_sheet("Daily Summary")
 
     _fill_data_sheet(data_sheet, db, uploads)
     _fill_classification_movements_sheet(movement_sheet, db)
+    _fill_new_users_sheet(new_users_sheet, db)
     _fill_deleted_users_sheet(deleted_sheet, db)
     _fill_summary_sheet(summary_sheet, db, uploads)
 
@@ -64,10 +69,18 @@ def _fill_data_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
         separator_column = start_column + 2
 
         deleted_count = db.scalar(
-            select(func.count(DeletedUser.id)).where(DeletedUser.current_upload_id == upload.id)
+            select(func.count(DeletedUser.id)).where(
+                DeletedUser.current_upload_id == upload.id
+            )
         ) or 0
 
-        note = f"{deleted_count} removed" if deleted_count else "No removals"
+        new_user_count = db.scalar(
+            select(func.count(NewUser.id)).where(
+                NewUser.current_upload_id == upload.id
+            )
+        ) or 0       
+
+        note = f"{new_user_count} added | {deleted_count} removed"
         sheet.cell(row=2, column=user_column, value=note)
         sheet.cell(row=2, column=user_column).fill = NOTE_FILL
         sheet.cell(row=2, column=user_column).font = TITLE_FONT
@@ -144,6 +157,43 @@ def _fill_classification_movements_sheet(sheet, db: Session) -> None:
 
     sheet.freeze_panes = "A2"
 
+def _fill_new_users_sheet(sheet, db: Session) -> None:
+    headers = [
+        "Added Date",
+        "Username",
+        "Target Classification",
+    ]
+
+    sheet.append(headers)
+
+    for cell in sheet[1]:
+        cell.fill = HEADER_FILL
+        cell.font = TITLE_FONT
+
+    new_users = db.scalars(
+        select(NewUser).order_by(
+            NewUser.added_date,
+            NewUser.username
+        )
+    ).all()
+
+    for user in new_users:
+        sheet.append([
+            user.added_date,
+            user.username,
+            user.category,
+        ])
+
+    for row in sheet.iter_rows(min_row=2, min_col=1, max_col=3):
+        row[0].number_format = "yyyy-mm-dd"
+
+    widths = [18, 22, 28]
+
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    sheet.freeze_panes = "A2"
+
 
 def _fill_deleted_users_sheet(sheet, db: Session) -> None:
     headers = ["Deleted Date", "Username", "Target Classification", "Last Seen Date"]
@@ -177,6 +227,7 @@ def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
         "Core Users",
         "Self-Service Users",
         "Other Users",
+        "New Users",
         "Deleted Users",
         "Advanced to Core",
         "Advanced to Self-Service",
@@ -196,6 +247,12 @@ def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
         for user in users:
             counts[_category_key(user.category)] += 1
 
+        new_users_count = len(
+            db.scalars(
+                select(NewUser).where(NewUser.current_upload_id == upload.id)
+            ).all()
+        )
+        
         deleted_count = len(
             db.scalars(
                 select(DeletedUser).where(DeletedUser.current_upload_id == upload.id)
@@ -227,6 +284,7 @@ def _fill_summary_sheet(sheet, db: Session, uploads: list[Upload]) -> None:
                 counts["core"],
                 counts["self"],
                 counts["other"],
+                new_users_count,
                 deleted_count,
                 movement_counts["advanced_users_to_core_users"],
                 movement_counts["advanced_users_to_self_service_users"],
