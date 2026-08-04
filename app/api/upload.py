@@ -1,4 +1,3 @@
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +43,7 @@ def parse_upload_date(upload_date: str | None, filename: str) -> datetime:
 
     return datetime.utcnow()
 
+
 def find_export_files_from_folder() -> list[tuple[datetime, Path]]:
     folder_value = get_settings().sap_export_watch_folder
     if not folder_value:
@@ -82,6 +82,7 @@ def find_export_files_from_folder() -> list[tuple[datetime, Path]]:
 
     export_files.sort(key=lambda item: item[0])
     return export_files
+
 
 def get_uploaded_date_keys(db: Session) -> set[str]:
     upload_dates = db.scalars(select(Upload.upload_date)).all()
@@ -363,6 +364,7 @@ def upload_excel(
         "classification_movements": len(classification_movements),
         "upload_date": parsed_upload_date.date().isoformat(),
     }
+
 
 @router.post("/latest-from-folder", status_code=status.HTTP_201_CREATED)
 def upload_latest_from_folder(db: Session = Depends(get_db)) -> dict[str, int | str | list[str]]:
