@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -7,16 +9,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import admin, auth, dashboard, deleted_users, history, reports, upload
 from app.core.auth import require_ready_user
 from app.core.config import get_settings
-from app.core.database import check_database_connection, create_database_tables
+from app.core.database import SessionLocal, check_database_connection, create_database_tables
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+def sync_sap_exports_in_background() -> None:
+    """Run a non-interactive folder scan using its own database session."""
+    with SessionLocal() as db:
+        result = upload.sync_exports_from_folder(db, raise_when_nothing_to_sync=False)
+        if result:
+            logger.info("Automatically synced %s SAP export file(s).", result["uploaded_count"])
+
+
+async def watch_sap_export_folder() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(sync_sap_exports_in_background)
+        except Exception:
+            logger.exception("Automatic SAP export sync failed.")
+        await asyncio.sleep(max(settings.sap_export_auto_sync_interval_seconds, 10))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     create_database_tables()
-    yield
+    sync_task = None
+    if settings.sap_export_watch_folder and settings.sap_export_auto_sync_enabled:
+        sync_task = asyncio.create_task(watch_sap_export_folder())
+    try:
+        yield
+    finally:
+        if sync_task:
+            sync_task.cancel()
+            try:
+                await sync_task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

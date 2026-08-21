@@ -13,6 +13,8 @@ class Settings(BaseModel):
     auth_token_hours: int = 12
     auth_admin_email: str = "priyanthas.cblms@cbllk.com"
     sap_export_watch_folder: str | None = None
+    sap_export_auto_sync_enabled: bool = True
+    sap_export_auto_sync_interval_seconds: int = 60
 
 
 @lru_cache
@@ -30,4 +32,8 @@ def get_settings() -> Settings:
         auth_token_hours=int(getenv("AUTH_TOKEN_HOURS", "12")),
         auth_admin_email=getenv("AUTH_ADMIN_EMAIL", "priyanthas.cblms@cbllk.com").lower(),
         sap_export_watch_folder=getenv("SAP_EXPORT_WATCH_FOLDER"),
+        sap_export_auto_sync_enabled=getenv("SAP_EXPORT_AUTO_SYNC_ENABLED", "true"),
+        sap_export_auto_sync_interval_seconds=int(
+            getenv("SAP_EXPORT_AUTO_SYNC_INTERVAL_SECONDS", "60")
+        ),
     )

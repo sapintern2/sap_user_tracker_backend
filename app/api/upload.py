@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from shutil import copy2, copyfileobj
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,15 +33,12 @@ def parse_export_datetime(filename: str) -> datetime | None:
     return datetime.strptime(f"{date_part}{time_part}", "%Y%m%d%H%M%S")
 
 
-def parse_upload_date(upload_date: str | None, filename: str) -> datetime:
-    if upload_date:
-        return datetime.strptime(upload_date, "%Y-%m-%d")
-
+def parse_upload_date(filename: str) -> datetime:
     export_datetime = parse_export_datetime(filename)
     if export_datetime:
         return export_datetime
 
-    return datetime.utcnow()
+    raise ValueError("Filename must include EXPORT_YYYYMMDD_HHMMSS so the upload date can be identified.")
 
 
 def find_export_files_from_folder() -> list[tuple[datetime, Path]]:
@@ -87,6 +84,65 @@ def find_export_files_from_folder() -> list[tuple[datetime, Path]]:
 def get_uploaded_date_keys(db: Session) -> set[str]:
     upload_dates = db.scalars(select(Upload.upload_date)).all()
     return {upload_date.date().isoformat() for upload_date in upload_dates}
+
+
+def sync_exports_from_folder(
+    db: Session, *, raise_when_nothing_to_sync: bool = True
+) -> dict[str, int | str | list[str]] | None:
+    """Copy and import every export-date that has not yet been uploaded."""
+    try:
+        export_files = find_export_files_from_folder()
+    except HTTPException:
+        if raise_when_nothing_to_sync:
+            raise
+        return None
+
+    uploaded_date_keys = get_uploaded_date_keys(db)
+    pending_files = [
+        (export_datetime, file_path)
+        for export_datetime, file_path in export_files
+        if export_datetime.date().isoformat() not in uploaded_date_keys
+    ]
+
+    if not pending_files:
+        if raise_when_nothing_to_sync:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="All SAP export files in the folder are already uploaded.",
+            )
+        return None
+
+    uploaded_results = []
+    for export_datetime, export_file in pending_files:
+        UPLOAD_DIR.mkdir(exist_ok=True)
+        saved_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{export_file.name}"
+        saved_path = UPLOAD_DIR / saved_name
+        copy2(export_file, saved_path)
+        uploaded_results.append(
+            save_upload_result(
+                db=db,
+                source_name=export_file.name,
+                saved_name=saved_name,
+                saved_path=saved_path,
+                parsed_upload_date=export_datetime,
+                audit_action="auto_excel_upload",
+            )
+        )
+
+    return {
+        "message": "SAP export sync completed successfully",
+        "uploaded_count": len(uploaded_results),
+        "uploaded_files": [result["file_name"] for result in uploaded_results],
+        "first_file": uploaded_results[0]["file_name"],
+        "last_file": uploaded_results[-1]["file_name"],
+        "total_users": uploaded_results[-1]["total_users"],
+        "deleted_users": sum(int(result["deleted_users"]) for result in uploaded_results),
+        "new_users": sum(int(result["new_users"]) for result in uploaded_results),
+        "classification_movements": sum(
+            int(result["classification_movements"]) for result in uploaded_results
+        ),
+        "upload_date": uploaded_results[-1]["upload_date"],
+    }
 
 
 def save_upload_result(
@@ -225,7 +281,6 @@ def save_upload_result(
 @router.post("", status_code=status.HTTP_201_CREATED)
 def upload_excel(
     file: UploadFile = File(...),
-    upload_date: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> dict[str, int | str]:
     extension = Path(file.filename or "").suffix.lower()
@@ -244,7 +299,7 @@ def upload_excel(
 
     try:
         users = read_sap_user_export(saved_path)
-        parsed_upload_date = parse_upload_date(upload_date, file.filename or saved_name)
+        parsed_upload_date = parse_upload_date(file.filename or saved_name)
     except ValueError as error:
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
@@ -358,6 +413,7 @@ def upload_excel(
     return {
         "message": "Excel uploaded successfully",
         "upload_id": current_upload.id,
+        "file_name": file.filename or saved_name,
         "total_users": len(users),
         "deleted_users": len(deleted_users),
         "new_users": len(new_users),
@@ -368,52 +424,6 @@ def upload_excel(
 
 @router.post("/latest-from-folder", status_code=status.HTTP_201_CREATED)
 def upload_latest_from_folder(db: Session = Depends(get_db)) -> dict[str, int | str | list[str]]:
-    export_files = find_export_files_from_folder()
-    uploaded_date_keys = get_uploaded_date_keys(db)
-
-    pending_files = [
-        (export_datetime, file_path)
-        for export_datetime, file_path in export_files
-        if export_datetime.date().isoformat() not in uploaded_date_keys
-    ]
-
-    if not pending_files:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="All SAP export files in the folder are already uploaded.",
-        )
-
-    uploaded_results = []
-
-    for export_datetime, export_file in pending_files:
-        UPLOAD_DIR.mkdir(exist_ok=True)
-
-        saved_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{export_file.name}"
-        saved_path = UPLOAD_DIR / saved_name
-        copy2(export_file, saved_path)
-
-        result = save_upload_result(
-            db=db,
-            source_name=export_file.name,
-            saved_name=saved_name,
-            saved_path=saved_path,
-            parsed_upload_date=export_datetime,
-            audit_action="auto_excel_upload",
-        )
-
-        uploaded_results.append(result)
-
-    return {
-        "message": "SAP export sync completed successfully",
-        "uploaded_count": len(uploaded_results),
-        "uploaded_files": [result["file_name"] for result in uploaded_results],
-        "first_file": uploaded_results[0]["file_name"],
-        "last_file": uploaded_results[-1]["file_name"],
-        "total_users": uploaded_results[-1]["total_users"],
-        "deleted_users": sum(int(result["deleted_users"]) for result in uploaded_results),
-        "new_users": sum(int(result["new_users"]) for result in uploaded_results),
-        "classification_movements": sum(
-            int(result["classification_movements"]) for result in uploaded_results
-        ),
-        "upload_date": uploaded_results[-1]["upload_date"],
-    }
+    result = sync_exports_from_folder(db)
+    assert result is not None
+    return result
