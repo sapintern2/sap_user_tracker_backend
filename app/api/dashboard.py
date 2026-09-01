@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,90 @@ MOVEMENT_KEYS = [
 
 def movement_key(from_category: str, to_category: str) -> str:
     return f"{from_category.replace('_users', '')}_to_{to_category.replace('_users', '')}"
+
+
+def get_upload_for_date(db: Session, upload_date: date) -> Upload | None:
+    start_at = datetime.combine(upload_date, time.min)
+    end_at = datetime.combine(upload_date, time.max)
+    return db.scalar(
+        select(Upload)
+        .where(Upload.upload_date >= start_at, Upload.upload_date <= end_at)
+        .order_by(Upload.upload_date.desc(), Upload.id.desc())
+        .limit(1)
+    )
+
+
+@router.get("/compare")
+def compare_uploads(
+    base_date: date = Query(...),
+    compare_date: date = Query(...),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    if base_date >= compare_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Choose an earlier base date and a later comparison date.",
+        )
+
+    base_upload = get_upload_for_date(db, base_date)
+    compare_upload = get_upload_for_date(db, compare_date)
+    if not base_upload or not compare_upload:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="An upload could not be found for one of the selected dates.",
+        )
+
+    base_users = {
+        user.username: user
+        for user in db.scalars(select(DailyUser).where(DailyUser.upload_id == base_upload.id)).all()
+    }
+    compare_users = {
+        user.username: user
+        for user in db.scalars(select(DailyUser).where(DailyUser.upload_id == compare_upload.id)).all()
+    }
+
+    def user_data(user: DailyUser) -> dict[str, str | None]:
+        return {
+            "username": user.username,
+            "user_id": user.user_id,
+            "full_name": user.full_name,
+            "category": user.category,
+        }
+
+    added = [user_data(compare_users[username]) for username in sorted(compare_users.keys() - base_users.keys())]
+    removed = [user_data(base_users[username]) for username in sorted(base_users.keys() - compare_users.keys())]
+    changed = []
+    for username in sorted(base_users.keys() & compare_users.keys()):
+        before = base_users[username]
+        after = compare_users[username]
+        changed_fields = [
+            field for field in ("user_id", "full_name", "category")
+            if getattr(before, field) != getattr(after, field)
+        ]
+        if changed_fields:
+            changed.append({
+                "username": username,
+                "changed_fields": changed_fields,
+                "before": user_data(before),
+                "after": user_data(after),
+            })
+
+    return {
+        "base_upload": {"id": base_upload.id, "upload_date": base_upload.upload_date.date().isoformat(), "total_users": base_upload.total_users},
+        "compare_upload": {"id": compare_upload.id, "upload_date": compare_upload.upload_date.date().isoformat(), "total_users": compare_upload.total_users},
+        "summary": {
+            "base_total": base_upload.total_users,
+            "compare_total": compare_upload.total_users,
+            "added": len(added),
+            "removed": len(removed),
+            "changed": len(changed),
+        },
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "base_users": [user_data(base_users[username]) for username in sorted(base_users)],
+        "compare_users": [user_data(compare_users[username]) for username in sorted(compare_users)],
+    }
 
 
 @router.get("/users")
